@@ -1,0 +1,63 @@
+{
+  "name": "ontology",
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "apps/*",
+      "packages/*"
+    ],
+    "catalog": {
+      "dotenv": "^17.2.2",
+      "zod": "^4.1.13",
+      "lucide-react": "^0.546.0",
+      "next-themes": "^0.4.6",
+      "react": "^19.2.3",
+      "react-dom": "^19.2.3",
+      "sonner": "^2.0.5",
+      "convex": "^1.33.1",
+      "better-auth": "1.5.3",
+      "@convex-dev/better-auth": "^0.11.3",
+      "@types/node": "^25.5.0",
+      "@types/react": "^19.2.10",
+      "@types/react-dom": "^19.2.3",
+      "tailwindcss": "^4.1.18"
+    }
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "check-types": "turbo check-types",
+    "dev:docs": "turbo -F @ontology/docs dev",
+    "dev:extension": "turbo -F @ontology/extension dev",
+    "dev:native": "turbo -F @ontology/native dev",
+    "dev:web": "turbo -F @ontology/web dev",
+    "dev:vision": "turbo -F @ontology/vision dev",
+    "dev:server": "turbo -F @ontology/backend dev",
+    "dev:setup": "turbo -F @ontology/backend dev:setup",
+    "check": "ultracite check",
+    "fix": "ultracite fix",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@ontology/env": "workspace:*",
+    "dotenv": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.7",
+    "@types/node": "catalog:",
+    "@ontology/config": "workspace:*",
+    "husky": "latest",
+    "lint-staged": "latest",
+    "turbo": "^2.8.12",
+    "typescript": "^5",
+    "ultracite": "7.3.2"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,json,jsonc,css,scss,md,mdx}": [
+      "bunx ultracite fix"
+    ]
+  },
+  "packageManager": "bun@1.3.1"
+}

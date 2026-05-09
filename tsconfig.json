@@ -1,0 +1,6 @@
+{
+  "extends": "@ontology/config/tsconfig.base.json",
+  "compilerOptions": {
+    "strictNullChecks": true
+  }
+}
