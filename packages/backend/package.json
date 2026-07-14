@@ -4,12 +4,18 @@
   "description": "",
   "license": "ISC",
   "author": "",
+  "exports": {
+    "./convex/_generated/api": "./convex/_generated/api.js",
+    "./convex/_generated/dataModel": "./convex/_generated/dataModel.d.ts"
+  },
   "scripts": {
     "dev": "convex dev",
     "dev:setup": "convex dev --configure --until-success"
   },
   "dependencies": {
     "@convex-dev/better-auth": "catalog:",
+    "@convex-dev/r2": "^0.10.1",
+    "@ontology/shared": "workspace:*",
     "better-auth": "catalog:",
     "convex": "catalog:",
     "dotenv": "catalog:",

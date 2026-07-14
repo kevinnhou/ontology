@@ -17,8 +17,8 @@ export type ChartConfig = Record<
 		label?: React.ReactNode;
 		icon?: React.ComponentType;
 	} & (
-		| { color?: string; theme?: never }
-		| { color?: never; theme: Record<keyof typeof THEMES, string> }
+		| { colour?: string; theme?: never }
+		| { colour?: never; theme: Record<keyof typeof THEMES, string> }
 	)
 >;
 
@@ -81,11 +81,11 @@ function ChartContainer({
 }
 
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
-	const colorConfig = Object.entries(config).filter(
-		([, config]) => config.theme ?? config.color
+	const colourConfig = Object.entries(config).filter(
+		([, config]) => config.theme ?? config.colour
 	);
 
-	if (!colorConfig.length) {
+	if (!colourConfig.length) {
 		return null;
 	}
 
@@ -97,12 +97,12 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
 					.map(
 						([theme, prefix]) => `
 ${prefix} [data-chart=${id}] {
-${colorConfig
+${colourConfig
 	.map(([key, itemConfig]) => {
-		const color =
+		const colour =
 			itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ??
-			itemConfig.color;
-		return color ? `  --color-${key}: ${color};` : null;
+			itemConfig.colour;
+		return colour ? `  --color-${key}: ${colour};` : null;
 	})
 	.join("\n")}
 }
@@ -127,7 +127,7 @@ function ChartTooltipContent({
 	labelFormatter,
 	labelClassName,
 	formatter,
-	color,
+	colour,
 	nameKey,
 	labelKey,
 }: React.ComponentProps<typeof RechartsPrimitive.Tooltip> &
@@ -137,6 +137,7 @@ function ChartTooltipContent({
 		indicator?: "line" | "dot" | "dashed";
 		nameKey?: string;
 		labelKey?: string;
+		colour?: string;
 	} & Omit<
 		RechartsPrimitive.DefaultTooltipContentProps<
 			TooltipValueType,
@@ -203,7 +204,7 @@ function ChartTooltipContent({
 					.map((item, index) => {
 						const key = `${nameKey ?? item.name ?? item.dataKey ?? "value"}`;
 						const itemConfig = getPayloadConfigFromPayload(config, item, key);
-						const indicatorColor = color ?? item.payload?.fill ?? item.color;
+						const indicatorColour = colour ?? item.payload?.fill ?? item.color;
 
 						return (
 							<div
@@ -234,8 +235,8 @@ function ChartTooltipContent({
 													)}
 													style={
 														{
-															"--color-bg": indicatorColor,
-															"--color-border": indicatorColor,
+															"--color-bg": indicatorColour,
+															"--color-border": indicatorColour,
 														} as React.CSSProperties
 													}
 												/>

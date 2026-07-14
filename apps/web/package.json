@@ -9,8 +9,10 @@
   },
   "dependencies": {
     "@convex-dev/better-auth": "catalog:",
+    "@hookform/resolvers": "^5.4.0",
     "@ontology/backend": "workspace:*",
     "@ontology/env": "workspace:*",
+    "@ontology/shared": "workspace:*",
     "@ontology/ui": "workspace:*",
     "@tanstack/react-form": "^1.28.0",
     "babel-plugin-react-compiler": "^1.0.0",
@@ -22,8 +24,10 @@
     "next-themes": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
+    "react-hook-form": "^7.77.0",
     "sonner": "catalog:",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
     "@ontology/config": "workspace:*",

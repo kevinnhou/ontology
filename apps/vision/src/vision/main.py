@@ -1,6 +1,16 @@
+import logging
+from concurrent.futures import ThreadPoolExecutor
+
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+
+from .pipeline import run_pipeline
+from .schemas import ProcessRequest
+
+logging.basicConfig(level=logging.INFO)
+
+_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def _cors_origins() -> list[str]:
@@ -24,6 +34,11 @@ def ontology() -> FastAPI:
     @application.get("/")
     def root() -> dict[str, str]:
         return {}
+
+    @application.post("/process")
+    def process(request: ProcessRequest) -> dict[str, str]:
+        _executor.submit(run_pipeline, request)
+        return {"status": "accepted", "matchId": request.matchId}
 
     return application
 

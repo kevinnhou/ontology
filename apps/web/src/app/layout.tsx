@@ -30,12 +30,12 @@ export default async function RootLayout({
 }>) {
 	const token = await getToken();
 	return (
-		<html dir="ltr" lang="en" suppressHydrationWarning>
+		<html className="dark" dir="ltr" lang="en" suppressHydrationWarning>
 			<body
-				className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+				className={`${geistSans.variable} ${geistMono.variable} select-none bg-[linear-gradient(#141414_1px,transparent_1px),linear-gradient(90deg,#141414_1px,transparent_1px)] bg-background bg-size-[8px_8px] antialiased`}
 			>
 				<Providers initialToken={token}>
-					<div className="h-svh">{children}</div>
+					<div className="h-svh font-mono">{children}</div>
 				</Providers>
 			</body>
 		</html>

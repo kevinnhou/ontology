@@ -1,1 +1,23 @@
 @import "@ontology/ui/globals.css";
+
+:root {
+	--radius: 0;
+	--background: #0c0c0c;
+	--foreground: #e8e8e8;
+	--card: #161616;
+	--card-foreground: #e8e8e8;
+	--popover: #161616;
+	--popover-foreground: #e8e8e8;
+	--primary: #e8e8e8;
+	--primary-foreground: #0c0c0c;
+	--secondary: #1e1e1e;
+	--secondary-foreground: #e8e8e8;
+	--muted: #1e1e1e;
+	--muted-foreground: #888888;
+	--accent: #2a2a2a;
+	--accent-foreground: #e8e8e8;
+	--destructive: #c44;
+	--border: #2a2a2a;
+	--input: #2a2a2a;
+	--ring: #555555;
+}
