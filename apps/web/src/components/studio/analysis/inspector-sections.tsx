@@ -34,7 +34,7 @@ export function ProcessingBadge() {
 	return (
 		<header className="mb-4 flex items-center gap-1.5 text-[8px] text-amber-400/90 uppercase tracking-[0.2em]">
 			<span className="size-1 animate-pulse bg-amber-400" />
-			Live
+			Processing
 		</header>
 	);
 }
@@ -141,7 +141,7 @@ function HeatmapSection() {
 
 export function StageControls() {
 	const stageView = useStudioStore((state) => state.stageView);
-	if (stageView === "live") {
+	if (stageView === "video") {
 		return <OverlaySection />;
 	}
 	return <HeatmapSection />;

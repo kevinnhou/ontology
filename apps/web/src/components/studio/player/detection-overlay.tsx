@@ -1,17 +1,13 @@
 "use client";
 
-import { api } from "@ontology/backend/convex/_generated/api";
-import { useQuery } from "convex/react";
-import { useEffect, useMemo, useRef, useState } from "react";
-
+import { useEffect, useMemo, useRef } from "react";
+import { useDetectionFrames } from "@/hooks/use-detection-frames";
 import { useStudioStore, useStudioVideoRef } from "@/hooks/use-studio-store";
 import {
 	displayedVideoRect,
 	drawDetections,
 	drawShotFlashes,
 	findFrameSpan,
-	OVERLAY_CHUNK_MS,
-	type OverlayFrame,
 } from "@/lib/studio/detection-overlay-render";
 
 export default function DetectionOverlay() {
@@ -20,44 +16,8 @@ export default function DetectionOverlay() {
 	const matchId = useStudioStore((state) => state.matchId);
 	const overlayLayers = useStudioStore((state) => state.overlayLayers);
 
-	const [playheadMs, setPlayheadMs] = useState(0);
-	const chunkIndex = Math.floor(playheadMs / OVERLAY_CHUNK_MS);
-
-	useEffect(() => {
-		const video = videoRef.current;
-		if (!video) {
-			return;
-		}
-		const handleTimeUpdate = () => setPlayheadMs(video.currentTime * 1000);
-		video.addEventListener("timeupdate", handleTimeUpdate);
-		video.addEventListener("seeked", handleTimeUpdate);
-		return () => {
-			video.removeEventListener("timeupdate", handleTimeUpdate);
-			video.removeEventListener("seeked", handleTimeUpdate);
-		};
-	}, [videoRef]);
-
-	const currentChunk = useQuery(api.detections.listWindow, {
-		matchId,
-		startMs: chunkIndex * OVERLAY_CHUNK_MS,
-		endMs: (chunkIndex + 1) * OVERLAY_CHUNK_MS - 1,
-	});
-	const nextChunk = useQuery(api.detections.listWindow, {
-		matchId,
-		startMs: (chunkIndex + 1) * OVERLAY_CHUNK_MS,
-		endMs: (chunkIndex + 2) * OVERLAY_CHUNK_MS - 1,
-	});
+	const { frames, isLoading } = useDetectionFrames(matchId);
 	const shotEvents = useStudioStore((state) => state.shotEvents);
-
-	const frames = useMemo<OverlayFrame[]>(() => {
-		const rows = [...(currentChunk ?? []), ...(nextChunk ?? [])];
-		return rows
-			.sort((a, b) => a.timestampMs - b.timestampMs)
-			.map((row) => ({
-				timestampMs: row.timestampMs,
-				detections: row.detections,
-			}));
-	}, [currentChunk, nextChunk]);
 
 	const sortedShots = useMemo(() => {
 		if (!shotEvents) {
@@ -106,8 +66,9 @@ export default function DetectionOverlay() {
 				return;
 			}
 
+			const overlayFrames = frames ?? [];
 			const timeMs = video.currentTime * 1000;
-			const span = findFrameSpan(frames, timeMs);
+			const span = findFrameSpan(overlayFrames, timeMs);
 			if (span && timeMs - span.current.timestampMs < 1500) {
 				drawDetections(context, span, timeMs, rect, overlayLayers);
 			}
@@ -122,9 +83,16 @@ export default function DetectionOverlay() {
 	}, [frames, sortedShots, overlayLayers, videoRef]);
 
 	return (
-		<canvas
-			className="pointer-events-none absolute inset-0 size-full"
-			ref={canvasRef}
-		/>
+		<>
+			{isLoading ? (
+				<div className="pointer-events-none absolute top-2 right-2 rounded bg-black/60 px-2 py-1 text-white text-xs">
+					Loading overlays…
+				</div>
+			) : null}
+			<canvas
+				className="pointer-events-none absolute inset-0 size-full"
+				ref={canvasRef}
+			/>
+		</>
 	);
 }

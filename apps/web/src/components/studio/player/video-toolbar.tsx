@@ -56,18 +56,13 @@ export default function VideoToolbar() {
 				</div>
 
 				<div className="flex items-center gap-2">
-					<span className="flex items-center gap-0.5">
-						<FilterButton
-							active={stageView === "live"}
-							label="Live"
-							onClick={() => setStageView("live")}
-						/>
-						<FilterButton
-							active={stageView === "heatmap"}
-							label="Heatmap"
-							onClick={() => setStageView("heatmap")}
-						/>
-					</span>
+					<FilterButton
+						active={stageView === "heatmap"}
+						label="Heatmap"
+						onClick={() =>
+							setStageView(stageView === "heatmap" ? "video" : "heatmap")
+						}
+					/>
 				</div>
 			</div>
 		</div>

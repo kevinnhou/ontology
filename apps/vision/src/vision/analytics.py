@@ -1,5 +1,3 @@
-"""Per-match analytics aggregation from shot events."""
-
 from collections import defaultdict
 from typing import Any
 

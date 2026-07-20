@@ -17,6 +17,7 @@ class ProcessRequest(BaseModel):
     matchId: str
     videoUrl: str
     callbackUrl: str
+    detectionsUploadUrl: str
     frameStride: int = Field(default=5, ge=1)
     ranges: list[TimeRange] = Field(default_factory=list)
     crop: CropRect | None = None

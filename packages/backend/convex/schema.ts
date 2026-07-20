@@ -4,7 +4,6 @@ import { v } from "convex/values";
 import {
 	allianceValidator,
 	annotationStyleValidator,
-	detectionValidator,
 	geometryValidator,
 	matchAnalyticsValidator,
 	matchProgressValidator,
@@ -37,17 +36,9 @@ export default defineSchema({
 		sectionAnalyse: v.optional(sectionAnalyseValidator),
 		processingRange: v.optional(processingRangeValidator),
 		processedRanges: v.optional(v.array(timeRangeValidator)),
+		detectionsKey: v.optional(v.string()),
 		createdAt: v.number(),
 	}).index("by_user", ["userId"]),
-
-	frameDetections: defineTable({
-		matchId: v.id("matches"),
-		frameIndex: v.number(),
-		timestampMs: v.number(),
-		detections: v.array(detectionValidator),
-	})
-		.index("by_match_and_frame", ["matchId", "frameIndex"])
-		.index("by_match_and_timestamp", ["matchId", "timestampMs"]),
 
 	pathSamples: defineTable({
 		matchId: v.id("matches"),

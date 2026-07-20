@@ -1,7 +1,6 @@
-"""Frame-strided YOLO inference pipeline for match videos."""
-
+import gzip
+import json
 import logging
-import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -20,7 +19,8 @@ from .tracking import RobotTracker
 
 logger = logging.getLogger(__name__)
 
-_BATCH_SIZE = 25
+_PROGRESS_INTERVAL = 25
+_PATH_SAMPLE_BUCKET_MS = 5000
 _ROBOT_CONFIDENCE_THRESHOLD = 0.40
 _FUEL_CONFIDENCE_THRESHOLD = 0.35
 _PREDICT_CONFIDENCE = 0.25
@@ -34,9 +34,6 @@ _FUEL_LABELS = {"fuel"}
 
 
 def _model_path() -> Path:
-    override = os.environ.get("VISION_MODEL_PATH")
-    if override:
-        return Path(override)
     return Path(__file__).resolve().parents[2] / "models" / "frc2026.pt"
 
 
@@ -56,7 +53,6 @@ def _sample_plan(
     total_frames: int,
     stride: int,
 ) -> list[list[int]]:
-    """Frame indices to sample, grouped by contiguous range."""
     if not ranges:
         ranges = [(0.0, (total_frames / fps) * 1000 if fps > 0 else 0.0)]
 
@@ -94,6 +90,45 @@ def _split_detections(
             fuel.append((x1, y1, x2, y2, confidence))
 
     return robots, fuel
+
+
+def _compute_path_samples(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    bucket_points: dict[int, list[dict[str, Any]]] = {}
+    for frame in frames:
+        timestamp_ms = frame["timestampMs"]
+        bucket_index = int(timestamp_ms // _PATH_SAMPLE_BUCKET_MS)
+        for detection in frame["detections"]:
+            if detection["label"] != "robot":
+                continue
+            bbox = detection["bbox"]
+            point = {
+                "x": bbox["x"] + bbox["w"] / 2,
+                "y": bbox["y"] + bbox["h"] / 2,
+                "timestampMs": timestamp_ms,
+            }
+            alliance = detection.get("alliance")
+            if alliance is not None:
+                point["alliance"] = alliance
+            bucket_points.setdefault(bucket_index, []).append(point)
+
+    return [
+        {"bucketIndex": bucket_index, "points": points}
+        for bucket_index, points in sorted(bucket_points.items())
+    ]
+
+
+def _upload_detection_artifact(
+    request: ProcessRequest,
+    client: ConvexCallbackClient,
+    frames: list[dict[str, Any]],
+) -> None:
+    artifact = {
+        "version": 1,
+        "frameStride": request.frameStride,
+        "frames": frames,
+    }
+    gzipped = gzip.compress(json.dumps(artifact).encode("utf-8"))
+    client.upload_detections(request.detectionsUploadUrl, gzipped)
 
 
 def run_pipeline(request: ProcessRequest) -> None:
@@ -160,7 +195,7 @@ def _process_capture(
     dt_seconds = request.frameStride / fps
 
     processed = 0
-    batch: list[dict[str, Any]] = []
+    all_frames: list[dict[str, Any]] = []
     client.push_progress(0, total_samples)
 
     for group in plan:
@@ -191,17 +226,13 @@ def _process_capture(
                         dt_seconds,
                         imgsz,
                     )
-                    batch.append(frame_result)
+                    all_frames.append(frame_result)
                     processed += 1
 
-                    if len(batch) >= _BATCH_SIZE:
-                        client.push_detections(batch)
+                    if processed % _PROGRESS_INTERVAL == 0:
                         client.push_progress(processed, total_samples)
-                        batch = []
             current += 1
 
-    if batch:
-        client.push_detections(batch)
     client.push_progress(processed, total_samples)
 
     shot_events = shot_detector.events
@@ -212,7 +243,9 @@ def _process_capture(
 
     processed_duration_ms = sum((group[-1] - group[0]) / fps * 1000 for group in plan)
     analytics = build_analytics(shot_events, processed, processed_duration_ms)
-    client.push_complete(shot_events, analytics)
+    path_samples = _compute_path_samples(all_frames)
+    _upload_detection_artifact(request, client, all_frames)
+    client.push_complete(shot_events, analytics, path_samples)
 
 
 def _process_frame(

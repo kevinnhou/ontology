@@ -1,5 +1,4 @@
 export const SHOT_FLASH_MS = 700;
-export const OVERLAY_CHUNK_MS = 20_000; // only frames near the playhead
 
 export const ALLIANCE_COLOURS: Record<string, string> = {
 	red: "#ef4444",

@@ -50,6 +50,7 @@ const matchDocValidator = v.object({
 	sectionAnalyse: v.optional(sectionAnalyseValidator),
 	processingRange: v.optional(processingRangeValidator),
 	processedRanges: v.optional(v.array(timeRangeValidator)),
+	detectionsKey: v.optional(v.string()),
 	createdAt: v.number(),
 });
 

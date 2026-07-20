@@ -19,3 +19,7 @@ export function assertVideoKeyOwnedByUser(
 		throw new Error("Invalid video key");
 	}
 }
+
+export function detectionsKeyForMatch(matchId: string): string {
+	return `detections/${matchId}.json.gz`;
+}

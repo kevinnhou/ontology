@@ -29,45 +29,6 @@ function ok(): Response {
 }
 
 http.route({
-	path: "/vision/detections",
-	method: "POST",
-	handler: httpAction(async (ctx, request) => {
-		if (!isAuthorized(request)) {
-			return unauthorized();
-		}
-		const body = (await request.json()) as {
-			matchId: Id<"matches">;
-			frames: {
-				frameIndex: number;
-				timestampMs: number;
-				detections: {
-					label: string;
-					confidence: number;
-					bbox: { x: number; y: number; w: number; h: number };
-					trackId?: number | null;
-					alliance?: string | null;
-				}[];
-			}[];
-		};
-		await ctx.runMutation(internal.processing.ingestDetectionBatch, {
-			matchId: body.matchId,
-			frames: body.frames.map((frame) => ({
-				frameIndex: frame.frameIndex,
-				timestampMs: frame.timestampMs,
-				detections: frame.detections.map((detection) => ({
-					label: detection.label,
-					confidence: detection.confidence,
-					bbox: detection.bbox,
-					trackId: detection.trackId ?? undefined,
-					alliance: normaliseAlliance(detection.alliance),
-				})),
-			})),
-		});
-		return ok();
-	}),
-});
-
-http.route({
 	path: "/vision/progress",
 	method: "POST",
 	handler: httpAction(async (ctx, request) => {
@@ -119,8 +80,17 @@ http.route({
 				processedFrames: number;
 				processedDurationMs: number;
 			};
+			pathSamples: {
+				bucketIndex: number;
+				points: {
+					x: number;
+					y: number;
+					alliance?: string | null;
+					timestampMs: number;
+				}[];
+			}[];
 		};
-		await ctx.runMutation(internal.processing.finalize, {
+		await ctx.runMutation(internal.processing.finalise, {
 			matchId: body.matchId,
 			shotEvents: body.shotEvents.map((event) => ({
 				trackId: event.trackId ?? undefined,
@@ -137,6 +107,15 @@ http.route({
 					alliance: normaliseAlliance(track.alliance) ?? "unknown",
 				})),
 			},
+			pathSamples: body.pathSamples.map((bucket) => ({
+				bucketIndex: bucket.bucketIndex,
+				points: bucket.points.map((point) => ({
+					x: point.x,
+					y: point.y,
+					timestampMs: point.timestampMs,
+					alliance: normaliseAlliance(point.alliance),
+				})),
+			})),
 		});
 		return ok();
 	}),

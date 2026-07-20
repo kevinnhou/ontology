@@ -58,7 +58,7 @@ export default function VideoStage() {
 			>
 				<track kind="captions" />
 			</video>
-			{stageView === "live" && <DetectionOverlay />}
+			{stageView === "video" && <DetectionOverlay />}
 			{stageView === "heatmap" && <HeatmapView />}
 			<StageOverlay />
 		</div>

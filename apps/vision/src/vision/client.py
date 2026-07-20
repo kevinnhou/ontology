@@ -1,5 +1,3 @@
-"""HTTP client used to push pipeline results back into Convex."""
-
 import logging
 import os
 from typing import Any
@@ -28,8 +26,17 @@ class ConvexCallbackClient:
         )
         response.raise_for_status()
 
-    def push_detections(self, frames: list[dict[str, Any]]) -> None:
-        self._post("/vision/detections", {"frames": frames})
+    def upload_detections(self, url: str, gzipped_bytes: bytes) -> None:
+        response = httpx.put(
+            url,
+            content=gzipped_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Encoding": "gzip",
+            },
+            timeout=_TIMEOUT,
+        )
+        response.raise_for_status()
 
     def push_progress(self, processed_frames: int, total_frames: int) -> None:
         self._post(
@@ -41,10 +48,15 @@ class ConvexCallbackClient:
         self,
         shot_events: list[dict[str, Any]],
         analytics: dict[str, Any],
+        path_samples: list[dict[str, Any]],
     ) -> None:
         self._post(
             "/vision/complete",
-            {"shotEvents": shot_events, "analytics": analytics},
+            {
+                "shotEvents": shot_events,
+                "analytics": analytics,
+                "pathSamples": path_samples,
+            },
         )
 
     def push_failed(self, error: str) -> None:

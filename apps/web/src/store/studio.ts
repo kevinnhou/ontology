@@ -105,7 +105,7 @@ export interface StudioActions {
 export type StudioStore = StudioState & StudioActions;
 
 export type OverlayLayer = "robots" | "fuel" | "shots";
-export type StageView = "live" | "heatmap";
+export type StageView = "video" | "heatmap";
 export type HeatmapMode = "pathing" | "shots";
 export type HeatmapAlliance = "all" | "red" | "blue";
 
@@ -149,7 +149,7 @@ function createInitialState(options: CreateStudioStoreOptions): StudioState {
 		draftProcessingRange: null,
 		optimisticSectionAnalyse: null,
 		overlayLayers: { robots: true, fuel: true, shots: true },
-		stageView: "live",
+		stageView: "video",
 		heatmapMode: "pathing",
 		heatmapAlliance: "all",
 		heatmapSection: "all",
