@@ -1,11 +1,5 @@
 {
-  "python.defaultInterpreterPath": "./apps/vision/.venv/bin/python",
-  "ty.configuration": {
-    "environment": {
-      "python": "apps/vision/.venv",
-      "root": ["apps/vision/src"]
-    }
-  },
+  "python.defaultInterpreterPath": "${workspaceFolder}/apps/vision/.venv/bin/python",
 
   "files.exclude": {
     ".agents": true,
@@ -64,7 +58,7 @@
   "editor.formatOnPaste": true,
   "editor.formatOnSave": true,
   "emmet.showExpandedAbbreviation": "never",
-  "typescript.tsdk": "node_modules/typescript/lib",
+  "js/ts.tsdk.path": "node_modules/typescript/lib",
   "[css]": {
     "editor.defaultFormatter": "biomejs.biome"
   },

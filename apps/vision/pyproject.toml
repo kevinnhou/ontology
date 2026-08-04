@@ -23,9 +23,11 @@ dev = [
 ]
 lint = [
   "ruff>=0.8",
+  "ty>=0.0.65",
 ]
 test = [
   "httpx>=0.28",
+  "httpx2>=2.9.1",
   "pytest>=8.3",
 ]
 
@@ -58,4 +60,21 @@ testpaths = ["tests"]
 
 [tool.ty.environment]
 python = ".venv"
+python-version = "3.13"
 root = ["./src"]
+
+[tool.ty.src]
+include = ["src", "tests"]
+exclude = [".venv", ".ruff_cache", ".pytest_cache"]
+
+[tool.basedpyright]
+include = ["src", "tests"]
+exclude = [".venv", ".ruff_cache", ".pytest_cache"]
+pythonVersion = "3.13"
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
+executionEnvironments = [
+  { root = "src" },
+  { root = "tests", extraPaths = ["src"] },
+]

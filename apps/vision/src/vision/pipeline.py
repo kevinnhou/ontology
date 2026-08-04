@@ -3,7 +3,7 @@ import json
 import logging
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import cv2
 import httpx
@@ -70,21 +70,25 @@ def _split_detections(
     result: Any, names: dict[int, str]
 ) -> tuple[sv.Detections, list[tuple[float, float, float, float, float]]]:
     detections = sv.Detections.from_ultralytics(result)
+    class_ids = detections.class_id
+    confidences = detections.confidence
+    if class_ids is None or confidences is None:
+        return sv.Detections.empty(), []
 
     robot_mask = np.array(
         [
             names.get(int(class_id), "").lower() in _ROBOT_LABELS
             and confidence > _ROBOT_CONFIDENCE_THRESHOLD
-            for class_id, confidence in zip(detections.class_id, detections.confidence, strict=True)
+            for class_id, confidence in zip(class_ids, confidences, strict=True)
         ],
         dtype=bool,
     )
-    robots = detections[robot_mask]
+    robots = cast(sv.Detections, detections[robot_mask])
 
     fuel: list[tuple[float, float, float, float, float]] = []
     for index in range(len(detections)):
-        label = names.get(int(detections.class_id[index]), "").lower()
-        confidence = float(detections.confidence[index])
+        label = names.get(int(class_ids[index]), "").lower()
+        confidence = float(confidences[index])
         if label in _FUEL_LABELS and confidence > _FUEL_CONFIDENCE_THRESHOLD:
             x1, y1, x2, y2 = (float(v) for v in detections.xyxy[index])
             fuel.append((x1, y1, x2, y2, confidence))
@@ -279,6 +283,10 @@ def _process_frame(
 
     detections: list[dict[str, Any]] = []
     robot_states: list[RobotState] = []
+    confidences = tracked_robots.confidence
+    if confidences is None:
+        confidences = np.zeros(len(tracked_robots), dtype=float)
+
     for index in range(len(tracked_robots)):
         bbox = to_full_norm_bbox(tracked_robots.xyxy[index])
         tracker_ids = tracked_robots.tracker_id
@@ -287,7 +295,7 @@ def _process_frame(
         detections.append(
             {
                 "label": "robot",
-                "confidence": float(tracked_robots.confidence[index]),
+                "confidence": float(confidences[index]),
                 "bbox": bbox,
                 "trackId": track_id,
                 "alliance": alliance,
