@@ -200,6 +200,7 @@ export const clearStaleData = internalMutation({
 		const pathSampleRows = await ctx.db
 			.query("pathSamples")
 			.withIndex("by_match_and_bucket", (q) => q.eq("matchId", args.matchId))
+			.filter((q) => q.neq(q.field("visionJobId"), args.visionJobId))
 			.take(CLEAR_BATCH_SIZE);
 		for (const row of pathSampleRows) {
 			if (row.visionJobId !== args.visionJobId) {
