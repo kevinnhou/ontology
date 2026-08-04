@@ -1,7 +1,7 @@
 "use client";
 
 import { api } from "@ontology/backend/convex/_generated/api";
-import { useAction } from "convex/react";
+import { useMutation } from "convex/react";
 import { useCallback, useState } from "react";
 
 import { useStudioStore } from "@/hooks/use-studio-store";
@@ -12,7 +12,7 @@ export default function ProcessButton() {
 	const status = useStudioStore((state) => state.matchStatus);
 	const progress = useStudioStore((state) => state.matchProgress);
 	const matchError = useStudioStore((state) => state.matchError);
-	const startProcessing = useAction(api.processing.startProcessing);
+	const startProcessing = useMutation(api.processing.startProcessing);
 	const [starting, setStarting] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
