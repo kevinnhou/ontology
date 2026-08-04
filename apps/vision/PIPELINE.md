@@ -1,18 +1,23 @@
 # pipeline
 
-1. Convex `startProcessing` prepares the match, clears stale shot/path data and POSTs to `/process` with:
+1. Convex `startProcessing` prepares the match and inserts one queued `visionJobs` row.
+
+2. The vision worker polls `/vision/claim`. Convex atomically claims a job, then returns fresh signed URLs and the processing inputs:
 > `videoUrl`
 > `callbackUrl`
-> `detectionsUploadUrl` presigned PUT for `detections/{matchId}.json.gz`
-> `frameStride`, `ranges`, optional `fps`
+> `detectionsUploadUrl` presigned PUT for an attempt specific R2 key
+> `frameStride`, `ranges`
 
-2. The pipeline downloads the video, runs YOLO + tracking + shot detection on sampled frames and pushes progress to `/vision/progress`.
+3. The pipeline downloads the video, runs YOLO + tracking + shot detection on sampled frames and pushes progress to `/vision/progress`.
 
-3. When processing finishes:
-> All frame detections are gzipped as `{ version, frameStride, frames }` and uploaded to R2 via `detectionsUploadUrl`.
+4. When processing finishes:
+> All frame detections are gzipped (`{ version, frameStride, frames }`) and uploaded to R2 via `detectionsUploadUrl`.
 > Robot path samples (5s buckets) are computed in memory.
-> `/vision/complete` receives `shotEvents`, `analytics`, and `pathSamples`.
+> `/vision/complete` receives `jobId`, `runId`, `shotEvents`, `analytics` and `pathSamples`.
 
-4. Convex `finalise` inserts shot events and path samples, stores analytics and sets `matches.detectionsKey`.
+5. Convex finalisation is scoped to the current `jobId` and `runId`. It inserts
+shot events and path samples once, stores analytics and sets the
+`matches.detectionsKey` only for the active run. Expired or duplicate runs are
+ignored safely.
 
 Web calls `detections.getDetectionsUrl` once per session, fetches the gzipped (R2) and caches frames in memory for the detection overlay.

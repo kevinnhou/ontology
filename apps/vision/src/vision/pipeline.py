@@ -136,11 +136,21 @@ def _upload_detection_artifact(
 
 
 def run_pipeline(request: ProcessRequest) -> None:
-    client = ConvexCallbackClient(request.callbackUrl, request.matchId)
+    client = ConvexCallbackClient(
+        request.callbackUrl,
+        request.matchId,
+        request.jobId,
+        request.runId,
+    )
     try:
         _run(request, client)
     except Exception as error:
-        logger.exception("vision pipeline failed for match %s", request.matchId)
+        logger.exception(
+            "vision pipeline failed for match %s (job %s, run %s)",
+            request.matchId,
+            request.jobId,
+            request.runId,
+        )
         client.push_failed(str(error))
 
 
