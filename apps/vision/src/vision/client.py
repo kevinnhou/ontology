@@ -10,9 +10,17 @@ _TIMEOUT = httpx.Timeout(30.0)
 
 
 class ConvexCallbackClient:
-    def __init__(self, callback_url: str, match_id: str) -> None:
+    def __init__(
+        self,
+        callback_url: str,
+        match_id: str,
+        job_id: str,
+        run_id: str,
+    ) -> None:
         self._base = callback_url.rstrip("/")
         self._match_id = match_id
+        self._job_id = job_id
+        self._run_id = run_id
         secret = os.environ.get("VISION_CALLBACK_SECRET", "")
         self._headers = {"Authorization": f"Bearer {secret}"}
 
@@ -20,7 +28,12 @@ class ConvexCallbackClient:
         url = f"{self._base}{path}"
         response = httpx.post(
             url,
-            json={"matchId": self._match_id, **payload},
+            json={
+                "matchId": self._match_id,
+                "jobId": self._job_id,
+                "runId": self._run_id,
+                **payload,
+            },
             headers=self._headers,
             timeout=_TIMEOUT,
         )

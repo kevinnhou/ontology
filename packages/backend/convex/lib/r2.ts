@@ -20,6 +20,9 @@ export function assertVideoKeyOwnedByUser(
 	}
 }
 
-export function detectionsKeyForMatch(matchId: string): string {
-	return `detections/${matchId}.json.gz`;
+export function detectionsKeyForAttempt(
+	matchId: string,
+	runId: string
+): string {
+	return `detections/${matchId}/${runId}.json.gz`;
 }

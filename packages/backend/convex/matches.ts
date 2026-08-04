@@ -51,6 +51,7 @@ const matchDocValidator = v.object({
 	processingRange: v.optional(processingRangeValidator),
 	processedRanges: v.optional(v.array(timeRangeValidator)),
 	detectionsKey: v.optional(v.string()),
+	visionJobId: v.optional(v.id("visionJobs")),
 	createdAt: v.number(),
 });
 

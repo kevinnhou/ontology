@@ -14,6 +14,8 @@ class CropRect(BaseModel):
 
 
 class ProcessRequest(BaseModel):
+    jobId: str
+    runId: str
     matchId: str
     videoUrl: str
     callbackUrl: str
