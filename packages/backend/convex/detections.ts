@@ -37,10 +37,19 @@ export const listPathSamples = query({
 			return [];
 		}
 
-		const buckets = await ctx.db
-			.query("pathSamples")
-			.withIndex("by_match_and_bucket", (q) => q.eq("matchId", args.matchId))
-			.collect();
+		const buckets = match.visionJobId
+			? await ctx.db
+					.query("pathSamples")
+					.withIndex("by_match_and_job_and_bucket", (q) =>
+						q.eq("matchId", args.matchId).eq("visionJobId", match.visionJobId)
+					)
+					.collect()
+			: await ctx.db
+					.query("pathSamples")
+					.withIndex("by_match_and_bucket", (q) =>
+						q.eq("matchId", args.matchId)
+					)
+					.collect();
 
 		return buckets.flatMap((bucket) => bucket.points);
 	},

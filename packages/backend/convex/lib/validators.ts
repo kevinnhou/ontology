@@ -105,6 +105,13 @@ export const matchProgressValidator = v.object({
 	totalFrames: v.number(),
 });
 
+export const visionJobStatusValidator = v.union(
+	v.literal("queued"),
+	v.literal("running"),
+	v.literal("completed"),
+	v.literal("failed")
+);
+
 export const matchStartSourceValidator = v.union(
 	v.literal("manual"),
 	v.literal("audio"),

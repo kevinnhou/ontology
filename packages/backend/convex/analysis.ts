@@ -12,6 +12,7 @@ const shotEventDocValidator = v.object({
 	_id: v.id("shotEvents"),
 	_creationTime: v.number(),
 	matchId: v.id("matches"),
+	visionJobId: v.optional(v.id("visionJobs")),
 	trackId: v.optional(v.number()),
 	alliance: allianceValidator,
 	frameIndex: v.number(),
@@ -29,6 +30,15 @@ export const listShotEvents = query({
 		if (!match || match.userId !== userIdFromAuth(user)) {
 			return [];
 		}
+		if (match.visionJobId) {
+			return await ctx.db
+				.query("shotEvents")
+				.withIndex("by_match_and_job", (q) =>
+					q.eq("matchId", args.matchId).eq("visionJobId", match.visionJobId)
+				)
+				.collect();
+		}
+
 		return await ctx.db
 			.query("shotEvents")
 			.withIndex("by_match", (q) => q.eq("matchId", args.matchId))
