@@ -17,6 +17,7 @@ class ProcessRequest(BaseModel):
     jobId: str
     runId: str
     matchId: str
+    attemptCount: int = Field(default=1, ge=1)
     videoUrl: str
     callbackUrl: str
     detectionsUploadUrl: str
