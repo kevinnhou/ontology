@@ -244,13 +244,6 @@ class VisionWorker:
             )
         except Exception as error:
             safe_error = safe_error_message(error)
-            result = PipelineResult(
-                completed=False,
-                processed_frames=0,
-                total_frames=0,
-                error=safe_error,
-                failure_status="reported",
-            )
             logger.error(
                 "vision pipeline raised unexpectedly worker_id=%s job_id=%s match_id=%s reason=%s",
                 self._config.worker_id,
@@ -258,8 +251,13 @@ class VisionWorker:
                 job.matchId,
                 safe_error,
             )
+            failure_status = "callback_failed"
             try:
-                self._client.report_failure(job.jobId, job.runId, safe_error)
+                failure_status = (
+                    "reported"
+                    if self._client.report_failure(job.jobId, job.runId, safe_error)
+                    else "stale"
+                )
             except httpx.HTTPError as report_error:
                 logger.error(
                     "vision failure callback failed worker_id=%s job_id=%s reason=%s",
@@ -267,6 +265,13 @@ class VisionWorker:
                     job.jobId,
                     safe_error_message(report_error),
                 )
+            result = PipelineResult(
+                completed=False,
+                processed_frames=0,
+                total_frames=0,
+                error=safe_error,
+                failure_status=failure_status,
+            )
         finally:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=min(5.0, self._config.heartbeat_interval_seconds))
