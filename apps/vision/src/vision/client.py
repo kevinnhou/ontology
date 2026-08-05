@@ -113,10 +113,13 @@ class VisionControlPlaneClient:
             headers=self._headers,
             timeout=_CONTROL_TIMEOUT,
         )
-        if response.status_code == 204:
-            return None
-        response.raise_for_status()
-        return ProcessRequest.model_validate(response.json())
+        try:
+            if response.status_code == 204:
+                return None
+            response.raise_for_status()
+            return ProcessRequest.model_validate(response.json())
+        finally:
+            response.close()
 
     def heartbeat(self, job_id: str, run_id: str) -> bool:
         response = self._post_callback(
