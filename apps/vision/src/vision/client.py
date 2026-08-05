@@ -266,6 +266,6 @@ class ConvexCallbackClient:
             return None
 
         if response_body is None:
-            return None
+            return "reported"
         status = response_body.get("status")
-        return status if isinstance(status, str) else None
+        return status if isinstance(status, str) else "reported"
