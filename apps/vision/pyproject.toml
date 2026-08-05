@@ -33,6 +33,7 @@ test = [
 
 [project.scripts]
 vision = "vision.main:run_dev"
+vision-worker = "vision.worker:run_worker"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/vision"]

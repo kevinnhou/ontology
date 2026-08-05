@@ -1,7 +1,9 @@
 import gzip
 import json
 import logging
+import re
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -26,15 +28,34 @@ _FUEL_CONFIDENCE_THRESHOLD = 0.35
 _PREDICT_CONFIDENCE = 0.25
 _MIN_IMGSZ = 640
 _MAX_IMGSZ = 1280
+_MODEL_PATH = Path(__file__).resolve().parents[2] / "models" / "frc2026.pt"
 
 DEFAULT_CROP = CropRect(x=0.0, y=0.12, w=1.0, h=0.63)
 
 _ROBOT_LABELS = {"robot"}
 _FUEL_LABELS = {"fuel"}
+_URL_PATTERN = re.compile(r"https?://[^\s)]+")
 
 
-def _model_path() -> Path:
-    return Path(__file__).resolve().parents[2] / "models" / "frc2026.pt"
+@dataclass(frozen=True, slots=True)
+class PipelineResult:
+    completed: bool
+    processed_frames: int
+    total_frames: int
+    error: str | None = None
+    failure_status: str | None = None
+
+
+def load_model() -> YOLO:
+    return YOLO(_MODEL_PATH)
+
+
+def safe_error_message(error: BaseException) -> str:
+    message = str(error).strip()
+    message = _URL_PATTERN.sub("[redacted-url]", message)
+    if not message:
+        message = "pipeline failed"
+    return f"{type(error).__name__}: {message}"[:500]
 
 
 def _download_video(url: str, destination: Path) -> None:
@@ -135,28 +156,56 @@ def _upload_detection_artifact(
     client.upload_detections(request.detectionsUploadUrl, gzipped)
 
 
-def run_pipeline(request: ProcessRequest) -> None:
+def run_pipeline(
+    request: ProcessRequest,
+    *,
+    model: YOLO | None = None,
+    http_client: httpx.Client | None = None,
+    callback_secret: str | None = None,
+) -> PipelineResult:
     client = ConvexCallbackClient(
         request.callbackUrl,
         request.matchId,
         request.jobId,
         request.runId,
+        http_client=http_client,
+        secret=callback_secret,
     )
     try:
-        _run(request, client)
+        _run(request, client, model)
+        return PipelineResult(
+            completed=True,
+            processed_frames=client.processed_frames,
+            total_frames=client.total_frames,
+        )
     except Exception as error:
-        logger.exception(
-            "vision pipeline failed for match %s (job %s, run %s)",
+        safe_error = safe_error_message(error)
+        logger.error(
+            "pipeline failed for match %s (job %s, run %s): %s",
             request.matchId,
             request.jobId,
             request.runId,
+            safe_error,
         )
-        client.push_failed(str(error))
+        failure_status = client.push_failed(safe_error)
+        return PipelineResult(
+            completed=False,
+            processed_frames=client.processed_frames,
+            total_frames=client.total_frames,
+            error=safe_error,
+            failure_status=failure_status,
+        )
+    finally:
+        client.close()
 
 
-def _run(request: ProcessRequest, client: ConvexCallbackClient) -> None:
-    model = YOLO(_model_path())
-    names: dict[int, str] = model.names if isinstance(model.names, dict) else {}
+def _run(
+    request: ProcessRequest,
+    client: ConvexCallbackClient,
+    model: YOLO | None = None,
+) -> None:
+    inference_model = model if model is not None else load_model()
+    names: dict[int, str] = inference_model.names if isinstance(inference_model.names, dict) else {}
 
     with tempfile.TemporaryDirectory() as temp_dir:
         video_path = Path(temp_dir) / "match.mp4"
@@ -167,7 +216,7 @@ def _run(request: ProcessRequest, client: ConvexCallbackClient) -> None:
             raise RuntimeError("Could not open downloaded video")
 
         try:
-            _process_capture(capture, model, names, request, client)
+            _process_capture(capture, inference_model, names, request, client)
         finally:
             capture.release()
 

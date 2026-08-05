@@ -210,7 +210,9 @@ http.route({
 			processedFrames: body.processedFrames,
 			totalFrames: body.totalFrames,
 		});
-		return result === "stale" ? stale() : jsonResponse({ ok: true });
+		return result === "stale"
+			? stale()
+			: jsonResponse({ ok: true, status: result });
 	}),
 });
 
@@ -309,7 +311,9 @@ http.route({
 			runId: body.runId,
 			error: body.error,
 		});
-		return result === "stale" ? stale() : jsonResponse({ ok: true });
+		return result === "stale"
+			? stale()
+			: jsonResponse({ ok: true, status: result });
 	}),
 });
 

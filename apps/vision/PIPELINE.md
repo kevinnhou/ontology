@@ -1,23 +1,46 @@
 # pipeline
 
-1. Convex `startProcessing` prepares the match and inserts one queued `visionJobs` row.
+## Runtime
 
-2. The vision worker polls `/vision/claim`. Convex atomically claims a job, then returns fresh signed URLs and the processing inputs:
-> `videoUrl`
-> `callbackUrl`
-> `detectionsUploadUrl` presigned PUT for an attempt specific R2 key
-> `frameStride`, `ranges`
+`vision-worker` is a long-lived process with one sequential worker loop and a
+lightweight FastAPI health server. FastAPI does not own match execution or
+retain an in-memory task. The worker:
 
-3. The pipeline downloads the video, runs YOLO + tracking + shot detection on sampled frames and pushes progress to `/vision/progress`.
+1. Polls Convex `POST /vision/claim` with an authenticated worker ID. Convex
+  atomically claims the oldest queued job and returns fresh signed URLs:
+   `videoUrl`, `callbackUrl`, and an attempt-specific
+   `detectionsUploadUrl`.
+2. Loads the YOLO model once, then runs the existing pipeline for the claimed
+  match.
+3. Sends job scoped progress and heartbeat callbacks while processing.
+4. Uploads the gzipped detection artefact to R2 and sends completion callbacks.
+5. Reports failures to Convex. Retriable failures are requeued until the
+  maximum attempt count is reached.
 
-4. When processing finishes:
-> All frame detections are gzipped (`{ version, frameStride, frames }`) and uploaded to R2 via `detectionsUploadUrl`.
-> Robot path samples (5s buckets) are computed in memory.
-> `/vision/complete` receives `jobId`, `runId`, `shotEvents`, `analytics` and `pathSamples`.
+Completion is scoped to both `jobId` and `runId`. Convex finalisation is idempotent.  
+(duplicate completion callbacks are ignored and expired runs cannot overwrite a newer run)
 
-5. Convex finalisation is scoped to the current `jobId` and `runId`. It inserts
-shot events and path samples once, stores analytics and sets the
-`matches.detectionsKey` only for the active run. Expired or duplicate runs are
-ignored safely.
+The worker stops claiming jobs as soon as shutdown begins. It finishes the
+current job when the shutdown window allows. If the process is terminated while
+the job is still running, heartbeats stop and Convex makes the job claimable
+again after the lease expires.
 
-Web calls `detections.getDetectionsUrl` once per session, fetches the gzipped (R2) and caches frames in memory for the detection overlay.
+## Endpoints
+
+- `GET /health` checks that the process is serving HTTP.
+- `GET /readiness` returns ready only after the worker has loaded its model and can
+poll Convex.
+- `POST /vision/claim` claims work through Convex.
+- `POST /vision/progress` updates progress and extends the lease.
+- `POST /vision/heartbeat` extends the lease independently of frame progress.
+- `POST /vision/complete` uploads final analytics and metadata.
+- `POST /vision/failed` requeues or fails the current attempt.
+
+## Data flow
+
+`startProcessing` prepares the match and inserts one queued `visionJobs` row. The pipeline downloads the video, runs YOLO, tracking and shot detection on sampled frames, and pushes progress. On completion, all frame detections are gzipped as `{ version, frameStride, frames }` and uploaded to R2. Robot path
+samples use five-second buckets, while Convex stores shot events, analytics,
+and the active detection key.
+
+The web app fetches the signed detection artefact URL once per session and
+caches decompressed frames in memory for the detection overlay.
