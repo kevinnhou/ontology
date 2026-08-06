@@ -45,6 +45,8 @@ coverage
 .cache
 tmp
 temp
+benchmark-results/
+apps/vision/benchmark-results/
 
 # Python
 .venv
