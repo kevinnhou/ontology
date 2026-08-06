@@ -58,14 +58,15 @@ select = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ty.environment]
 python = ".venv"
 python-version = "3.13"
-root = ["./src"]
+root = [".", "./src"]
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["src", "tests", "benchmarks"]
 exclude = [".venv", ".ruff_cache", ".pytest_cache"]
 
 [tool.basedpyright]
@@ -77,5 +78,6 @@ venv = ".venv"
 typeCheckingMode = "standard"
 executionEnvironments = [
   { root = "src" },
-  { root = "tests", extraPaths = ["src"] },
+  { root = "tests", extraPaths = ["src", "."] },
+  { root = "benchmarks", extraPaths = ["src", "."] },
 ]

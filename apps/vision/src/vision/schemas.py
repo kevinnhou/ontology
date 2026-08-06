@@ -22,6 +22,7 @@ class ProcessRequest(BaseModel):
     callbackUrl: str
     detectionsUploadUrl: str
     frameStride: int = Field(default=5, ge=1)
+    inferenceBatchSize: int = Field(default=8, ge=1, le=32)
     ranges: list[TimeRange] = Field(default_factory=list)
     crop: CropRect | None = None
     fps: float | None = None

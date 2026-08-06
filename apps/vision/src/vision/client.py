@@ -1,7 +1,9 @@
 import logging
 import os
 import time
-from typing import Any
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any, Protocol
 
 import httpx
 
@@ -162,6 +164,66 @@ class VisionControlPlaneClient:
         )
 
 
+class PipelineClient(Protocol):
+    processed_frames: int
+    total_frames: int
+
+    def close(self) -> None: ...
+
+    def push_progress(self, processed_frames: int, total_frames: int) -> None: ...
+
+    def upload_detections_file(self, url: str, path: Path) -> None: ...
+
+    def push_complete(
+        self,
+        shot_events: list[dict[str, Any]],
+        analytics: dict[str, Any],
+        path_samples: list[dict[str, Any]],
+    ) -> None: ...
+
+    def push_failed(self, error: str) -> str | None: ...
+
+
+class NoOpPipelineClient:
+    def __init__(self) -> None:
+        self.processed_frames = 0
+        self.total_frames = 0
+        self.progress_calls = 0
+        self.uploaded_bytes = 0
+        self.completed = False
+        self.shot_events: list[dict[str, Any]] = []
+        self.analytics: dict[str, Any] = {}
+        self.path_samples: list[dict[str, Any]] = []
+        self.failed_error: str | None = None
+
+    def close(self) -> None:
+        return
+
+    def push_progress(self, processed_frames: int, total_frames: int) -> None:
+        self.processed_frames = processed_frames
+        self.total_frames = total_frames
+        self.progress_calls += 1
+
+    def upload_detections_file(self, url: str, path: Path) -> None:
+        del url
+        self.uploaded_bytes += path.stat().st_size
+
+    def push_complete(
+        self,
+        shot_events: list[dict[str, Any]],
+        analytics: dict[str, Any],
+        path_samples: list[dict[str, Any]],
+    ) -> None:
+        self.shot_events = shot_events
+        self.analytics = analytics
+        self.path_samples = path_samples
+        self.completed = True
+
+    def push_failed(self, error: str) -> str:
+        self.failed_error = error
+        return "local"
+
+
 class ConvexCallbackClient:
     def __init__(
         self,
@@ -222,6 +284,27 @@ class ConvexCallbackClient:
             headers={
                 "Content-Type": "application/json",
                 "Content-Encoding": "gzip",
+            },
+            timeout=_UPLOAD_TIMEOUT,
+        )
+        try:
+            response.raise_for_status()
+        finally:
+            response.close()
+
+    def upload_detections_file(self, url: str, path: Path) -> None:
+        def chunks() -> Iterator[bytes]:
+            with path.open("rb") as file:
+                while chunk := file.read(1 << 20):
+                    yield chunk
+
+        response = self._http_client.put(
+            url,
+            content=chunks(),
+            headers={
+                "Content-Type": "application/json",
+                "Content-Encoding": "gzip",
+                "Content-Length": str(path.stat().st_size),
             },
             timeout=_UPLOAD_TIMEOUT,
         )

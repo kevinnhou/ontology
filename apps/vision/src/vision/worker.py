@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import socket
@@ -278,10 +279,16 @@ class VisionWorker:
             self._current_job = None
 
         duration_seconds = time.monotonic() - started_at
+        telemetry_json = json.dumps(
+            result.telemetry.to_dict() if result.telemetry is not None else {},
+            separators=(",", ":"),
+            sort_keys=True,
+        )
         if result.completed:
             logger.info(
                 "vision job completed worker_id=%s job_id=%s match_id=%s "
-                "attempt=%d duration_seconds=%.1f processed_frames=%d total_frames=%d",
+                "attempt=%d duration_seconds=%.1f processed_frames=%d "
+                "total_frames=%d peak_memory_mb=%.1f telemetry=%s",
                 self._config.worker_id,
                 job.jobId,
                 job.matchId,
@@ -289,12 +296,15 @@ class VisionWorker:
                 duration_seconds,
                 result.processed_frames,
                 result.total_frames,
+                result.peak_memory_mb or 0.0,
+                telemetry_json,
             )
         else:
             logger.error(
                 "vision job failed worker_id=%s job_id=%s match_id=%s "
                 "attempt=%d duration_seconds=%.1f processed_frames=%d "
-                "total_frames=%d state=%s failure_reason=%s",
+                "total_frames=%d peak_memory_mb=%.1f telemetry=%s "
+                "state=%s failure_reason=%s",
                 self._config.worker_id,
                 job.jobId,
                 job.matchId,
@@ -302,6 +312,8 @@ class VisionWorker:
                 duration_seconds,
                 result.processed_frames,
                 result.total_frames,
+                result.peak_memory_mb or 0.0,
+                telemetry_json,
                 result.failure_status or "unknown",
                 result.error or "unknown pipeline failure",
             )
