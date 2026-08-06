@@ -3,7 +3,8 @@ import json
 import logging
 import re
 import tempfile
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,18 +15,20 @@ import supervision as sv
 from ultralytics import YOLO
 
 from .analytics import build_analytics
-from .client import ConvexCallbackClient
+from .client import ConvexCallbackClient, NoOpPipelineClient, PipelineClient
 from .schemas import CropRect, ProcessRequest
 from .shots import RobotState, ShotDetector
+from .telemetry.collector import TelemetryCollector, peak_rss_bytes
+from .telemetry.models import TelemetrySnapshot
 from .tracking import RobotTracker
 
 logger = logging.getLogger(__name__)
 
-_PROGRESS_INTERVAL = 25
+_PROGRESS_INTERVAL_SECONDS = 1.0
 _PATH_SAMPLE_BUCKET_MS = 5000
 _ROBOT_CONFIDENCE_THRESHOLD = 0.40
 _FUEL_CONFIDENCE_THRESHOLD = 0.35
-_PREDICT_CONFIDENCE = 0.25
+_PREDICT_CONFIDENCE = _FUEL_CONFIDENCE_THRESHOLD
 _MIN_IMGSZ = 640
 _MAX_IMGSZ = 1280
 _MODEL_PATH = Path(__file__).resolve().parents[2] / "models" / "frc2026.pt"
@@ -42,12 +45,87 @@ class PipelineResult:
     completed: bool
     processed_frames: int
     total_frames: int
+    timings: dict[str, float] = field(default_factory=dict)
+    peak_memory_mb: float | None = None
+    telemetry: TelemetrySnapshot | None = None
     error: str | None = None
     failure_status: str | None = None
 
 
-def load_model() -> YOLO:
-    return YOLO(_MODEL_PATH)
+@dataclass(frozen=True, slots=True)
+class _BufferedFrame:
+    cropped: np.ndarray
+    crop_px: tuple[int, int, int, int]
+    frame_size: tuple[int, int]
+    frame_index: int
+    timestamp_ms: float
+    dt_seconds: float
+
+
+class _DetectionArtifactWriter:
+    def __init__(
+        self,
+        path: Path,
+        frame_stride: int,
+        telemetry: TelemetryCollector | None = None,
+    ) -> None:
+        self._file = gzip.open(path, "wt", encoding="utf-8", compresslevel=6)
+        self._telemetry = telemetry
+        self._file.write(f'{{"version":1,"frameStride":{frame_stride},"frames":[')
+        self._first_frame = True
+
+    def write(self, frame: dict[str, Any]) -> None:
+        if not self._first_frame:
+            self._file.write(",")
+        self._file.write(json.dumps(frame, separators=(",", ":")))
+        self._first_frame = False
+
+    def close(self) -> None:
+        if self._telemetry is None:
+            self._file.write("]}")
+            self._file.close()
+            return
+        with self._telemetry.measure_stage("artifact_finalisation"):
+            self._file.write("]}")
+            self._file.close()
+
+    def __enter__(self) -> "_DetectionArtifactWriter":
+        return self
+
+    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
+        self.close()
+
+
+class _PathSampleCollector:
+    def __init__(self) -> None:
+        self._bucket_points: dict[int, list[dict[str, Any]]] = {}
+
+    def add_frame(self, frame: dict[str, Any]) -> None:
+        timestamp_ms = frame["timestampMs"]
+        bucket_index = int(timestamp_ms // _PATH_SAMPLE_BUCKET_MS)
+        for detection in frame["detections"]:
+            if detection["label"] != "robot":
+                continue
+            bbox = detection["bbox"]
+            point = {
+                "x": bbox["x"] + bbox["w"] / 2,
+                "y": bbox["y"] + bbox["h"] / 2,
+                "timestampMs": timestamp_ms,
+            }
+            alliance = detection.get("alliance")
+            if alliance is not None:
+                point["alliance"] = alliance
+            self._bucket_points.setdefault(bucket_index, []).append(point)
+
+    def build(self) -> list[dict[str, Any]]:
+        return [
+            {"bucketIndex": bucket_index, "points": points}
+            for bucket_index, points in sorted(self._bucket_points.items())
+        ]
+
+
+def load_model(model_path: Path | None = None) -> YOLO:
+    return YOLO(model_path or _MODEL_PATH)
 
 
 def safe_error_message(error: BaseException) -> str:
@@ -68,23 +146,48 @@ def _download_video(url: str, destination: Path) -> None:
             file.write(chunk)
 
 
+def _normalise_ranges(
+    ranges: list[tuple[float, float]],
+    duration_ms: float,
+) -> list[tuple[float, float]]:
+    bounded = [(max(0.0, start_ms), min(duration_ms, end_ms)) for start_ms, end_ms in ranges]
+    valid = [(start_ms, end_ms) for start_ms, end_ms in bounded if end_ms >= start_ms]
+    valid.sort()
+
+    merged: list[tuple[float, float]] = []
+    for start_ms, end_ms in valid:
+        if not merged or start_ms > merged[-1][1]:
+            merged.append((start_ms, end_ms))
+            continue
+        previous_start, previous_end = merged[-1]
+        merged[-1] = (previous_start, max(previous_end, end_ms))
+    return merged
+
+
 def _sample_plan(
     ranges: list[tuple[float, float]],
     fps: float,
     total_frames: int,
     stride: int,
-) -> list[list[int]]:
+) -> list[range]:
     if not ranges:
         ranges = [(0.0, (total_frames / fps) * 1000 if fps > 0 else 0.0)]
+    else:
+        ranges = _normalise_ranges(
+            ranges,
+            (total_frames / fps) * 1000 if fps > 0 else 0.0,
+        )
 
-    plan: list[list[int]] = []
+    plan: list[range] = []
     for start_ms, end_ms in ranges:
         first = max(0, int(round((start_ms / 1000) * fps)))
         last = min(total_frames - 1, int(round((end_ms / 1000) * fps)))
         if last < first:
             continue
-        plan.append(list(range(first, last + 1, stride)))
-    return [group for group in plan if group]
+        group = range(first, last + 1, stride)
+        if len(group) > 0:
+            plan.append(group)
+    return plan
 
 
 def _split_detections(
@@ -118,42 +221,10 @@ def _split_detections(
 
 
 def _compute_path_samples(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    bucket_points: dict[int, list[dict[str, Any]]] = {}
+    collector = _PathSampleCollector()
     for frame in frames:
-        timestamp_ms = frame["timestampMs"]
-        bucket_index = int(timestamp_ms // _PATH_SAMPLE_BUCKET_MS)
-        for detection in frame["detections"]:
-            if detection["label"] != "robot":
-                continue
-            bbox = detection["bbox"]
-            point = {
-                "x": bbox["x"] + bbox["w"] / 2,
-                "y": bbox["y"] + bbox["h"] / 2,
-                "timestampMs": timestamp_ms,
-            }
-            alliance = detection.get("alliance")
-            if alliance is not None:
-                point["alliance"] = alliance
-            bucket_points.setdefault(bucket_index, []).append(point)
-
-    return [
-        {"bucketIndex": bucket_index, "points": points}
-        for bucket_index, points in sorted(bucket_points.items())
-    ]
-
-
-def _upload_detection_artifact(
-    request: ProcessRequest,
-    client: ConvexCallbackClient,
-    frames: list[dict[str, Any]],
-) -> None:
-    artifact = {
-        "version": 1,
-        "frameStride": request.frameStride,
-        "frames": frames,
-    }
-    gzipped = gzip.compress(json.dumps(artifact).encode("utf-8"))
-    client.upload_detections(request.detectionsUploadUrl, gzipped)
+        collector.add_frame(frame)
+    return collector.build()
 
 
 def run_pipeline(
@@ -162,7 +233,10 @@ def run_pipeline(
     model: YOLO | None = None,
     http_client: httpx.Client | None = None,
     callback_secret: str | None = None,
+    telemetry: TelemetryCollector | None = None,
+    model_path: Path | None = None,
 ) -> PipelineResult:
+    pipeline_telemetry = telemetry or TelemetryCollector()
     client = ConvexCallbackClient(
         request.callbackUrl,
         request.matchId,
@@ -171,14 +245,89 @@ def run_pipeline(
         http_client=http_client,
         secret=callback_secret,
     )
+    return _execute_pipeline(
+        request,
+        client,
+        model=model,
+        telemetry=pipeline_telemetry,
+        model_path=model_path,
+    )
+
+
+def run_local_pipeline(
+    request: ProcessRequest,
+    video_path: Path,
+    *,
+    model: YOLO | None = None,
+    client: PipelineClient | None = None,
+    telemetry: TelemetryCollector | None = None,
+    artifact_path: Path | None = None,
+    model_path: Path | None = None,
+) -> PipelineResult:
+    """Run the pipeline from a local video without requiring remote services."""
+    pipeline_client = client or NoOpPipelineClient()
+    pipeline_telemetry = telemetry or TelemetryCollector()
+    return _execute_pipeline(
+        request,
+        pipeline_client,
+        model=model,
+        telemetry=pipeline_telemetry,
+        video_path=video_path,
+        artifact_path=artifact_path,
+        model_path=model_path,
+    )
+
+
+def _execute_pipeline(
+    request: ProcessRequest,
+    client: PipelineClient,
+    *,
+    model: YOLO | None,
+    telemetry: TelemetryCollector,
+    video_path: Path | None = None,
+    artifact_path: Path | None = None,
+    model_path: Path | None = None,
+) -> PipelineResult:
     try:
-        _run(request, client, model)
-        return PipelineResult(
+        _run(
+            request,
+            client,
+            model,
+            telemetry,
+            video_path=video_path,
+            artifact_path=artifact_path,
+            model_path=model_path,
+        )
+        telemetry.set_value("peakRssBytes", peak_rss_bytes())
+        snapshot = telemetry.snapshot()
+        result = PipelineResult(
             completed=True,
             processed_frames=client.processed_frames,
             total_frames=client.total_frames,
+            timings={name: stats.total_seconds for name, stats in snapshot.stages.items()},
+            peak_memory_mb=_peak_memory_mb_from_snapshot(snapshot),
+            telemetry=snapshot,
         )
+        telemetry_json = json.dumps(
+            snapshot.to_dict(),
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        logger.info(
+            "vision pipeline metrics match_id=%s job_id=%s run_id=%s "
+            "processed_frames=%d total_frames=%d peak_memory_mb=%.1f telemetry=%s",
+            request.matchId,
+            request.jobId,
+            request.runId,
+            result.processed_frames,
+            result.total_frames,
+            result.peak_memory_mb or 0.0,
+            telemetry_json,
+        )
+        return result
     except Exception as error:
+        telemetry.set_value("peakRssBytes", peak_rss_bytes())
+        snapshot = telemetry.snapshot()
         safe_error = safe_error_message(error)
         logger.error(
             "pipeline failed for match %s (job %s, run %s): %s",
@@ -192,6 +341,9 @@ def run_pipeline(
             completed=False,
             processed_frames=client.processed_frames,
             total_frames=client.total_frames,
+            timings={name: stats.total_seconds for name, stats in snapshot.stages.items()},
+            peak_memory_mb=_peak_memory_mb_from_snapshot(snapshot),
+            telemetry=snapshot,
             error=safe_error,
             failure_status=failure_status,
         )
@@ -201,24 +353,66 @@ def run_pipeline(
 
 def _run(
     request: ProcessRequest,
-    client: ConvexCallbackClient,
+    client: PipelineClient,
     model: YOLO | None = None,
+    telemetry: TelemetryCollector | None = None,
+    *,
+    video_path: Path | None = None,
+    artifact_path: Path | None = None,
+    model_path: Path | None = None,
 ) -> None:
-    inference_model = model if model is not None else load_model()
+    pipeline_telemetry = telemetry or TelemetryCollector()
+    if model is None:
+        with pipeline_telemetry.measure_stage("model_load"):
+            inference_model = load_model(model_path)
+    else:
+        inference_model = model
     names: dict[int, str] = inference_model.names if isinstance(inference_model.names, dict) else {}
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        video_path = Path(temp_dir) / "match.mp4"
-        _download_video(request.videoUrl, video_path)
+        source_path = video_path
+        if source_path is None:
+            source_path = Path(temp_dir) / "match.mp4"
+            with pipeline_telemetry.measure_stage("download"):
+                _download_video(request.videoUrl, source_path)
 
-        capture = cv2.VideoCapture(str(video_path))
+        with pipeline_telemetry.measure_stage("capture_open"):
+            capture = cv2.VideoCapture(str(source_path))
         if not capture.isOpened():
             raise RuntimeError("Could not open downloaded video")
 
         try:
-            _process_capture(capture, inference_model, names, request, client)
+            _process_capture(
+                capture,
+                inference_model,
+                names,
+                request,
+                client,
+                artifact_path or Path(temp_dir) / "detections.json.gz",
+                pipeline_telemetry,
+            )
         finally:
             capture.release()
+
+
+def _peak_memory_mb_from_snapshot(snapshot: TelemetrySnapshot) -> float | None:
+    peak_bytes = snapshot.values.get("peakRssBytes")
+    if not isinstance(peak_bytes, (int, float)) or isinstance(peak_bytes, bool):
+        return None
+    return float(peak_bytes) / (1024 * 1024)
+
+
+def _finalise_shot_alliances(
+    shot_events: list[dict[str, Any]],
+    tracker: RobotTracker,
+) -> None:
+    for event in shot_events:
+        track_id = event.get("trackId")
+        if track_id is None:
+            continue
+        alliance = tracker.alliance_for_track(int(track_id))
+        if alliance != "unknown":
+            event["alliance"] = alliance
 
 
 def _process_capture(
@@ -226,7 +420,9 @@ def _process_capture(
     model: YOLO,
     names: dict[int, str],
     request: ProcessRequest,
-    client: ConvexCallbackClient,
+    client: PipelineClient,
+    artifact_path: Path,
+    metrics: TelemetryCollector,
 ) -> None:
     fps = capture.get(cv2.CAP_PROP_FPS) or 0.0
     if fps <= 0:
@@ -234,6 +430,14 @@ def _process_capture(
     total_frames = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
     frame_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    metrics.update_values(
+        {
+            "sourceFrames": total_frames,
+            "videoFps": fps,
+            "videoWidth": frame_width,
+            "videoHeight": frame_height,
+        }
+    )
 
     crop = request.crop or DEFAULT_CROP
     crop_x = int(crop.x * frame_width)
@@ -255,60 +459,170 @@ def _process_capture(
 
     tracker = RobotTracker(fps=fps / request.frameStride)
     shot_detector = ShotDetector()
-    dt_seconds = request.frameStride / fps
 
     processed = 0
-    all_frames: list[dict[str, Any]] = []
-    client.push_progress(0, total_samples)
+    path_collector = _PathSampleCollector()
+    with metrics.measure_stage("callbacks"):
+        client.push_progress(0, total_samples)
+    client.total_frames = total_samples
+    metrics.set_value("totalFrames", total_samples)
 
-    for group in plan:
-        first_frame = group[0]
-        capture.set(cv2.CAP_PROP_POS_FRAMES, first_frame)
-        wanted = set(group)
-        current = first_frame
-        last_frame = group[-1]
+    with _DetectionArtifactWriter(
+        artifact_path,
+        request.frameStride,
+        telemetry=metrics,
+    ) as artifact_writer:
+        last_progress_at = 0.0
 
-        while current <= last_frame:
-            grabbed = capture.grab()
-            if not grabbed:
-                break
-            if current in wanted:
-                ok, frame = capture.retrieve()
-                if ok:
-                    timestamp_ms = (current / fps) * 1000
-                    frame_result = _process_frame(
-                        frame[crop_y : crop_y + crop_h, crop_x : crop_x + crop_w],
-                        (crop_x, crop_y, crop_w, crop_h),
-                        (frame_width, frame_height),
-                        current,
-                        timestamp_ms,
-                        model,
-                        names,
-                        tracker,
-                        shot_detector,
-                        dt_seconds,
-                        imgsz,
+        def emit_batch(batch: list[_BufferedFrame]) -> None:
+            nonlocal last_progress_at, processed
+            if not batch:
+                return
+
+            frame_results = _process_frame_batch(
+                batch,
+                model,
+                names,
+                tracker,
+                shot_detector,
+                imgsz,
+                metrics,
+            )
+            for frame_result in frame_results:
+                with metrics.measure_stage("serialisation"):
+                    artifact_writer.write(frame_result)
+                    path_collector.add_frame(frame_result)
+                processed += 1
+
+            now = time.monotonic()
+            if processed == total_samples or now - last_progress_at >= _PROGRESS_INTERVAL_SECONDS:
+                with metrics.measure_stage("callbacks"):
+                    client.push_progress(processed, total_samples)
+                last_progress_at = now
+
+        for group_index, group in enumerate(plan):
+            if group_index > 0:
+                tracker.reset()
+                shot_detector.reset()
+
+            previous_sample_frame: int | None = None
+            batch: list[_BufferedFrame] = []
+            first_frame = group[0]
+            capture.set(cv2.CAP_PROP_POS_FRAMES, first_frame)
+            current = first_frame
+            last_frame = group[-1]
+            targets = iter(group)
+            target = next(targets, None)
+
+            while current <= last_frame and target is not None:
+                decode_started = time.perf_counter()
+                grabbed = capture.grab()
+                if not grabbed:
+                    break
+                if current == target:
+                    ok, frame = capture.retrieve()
+                    metrics.record_duration(
+                        "decode",
+                        time.perf_counter() - decode_started,
                     )
-                    all_frames.append(frame_result)
-                    processed += 1
+                    if ok:
+                        timestamp_ms = (current / fps) * 1000
+                        dt_seconds = (
+                            (current - previous_sample_frame) / fps
+                            if previous_sample_frame is not None
+                            else request.frameStride / fps
+                        )
+                        batch.append(
+                            _BufferedFrame(
+                                cropped=frame[
+                                    crop_y : crop_y + crop_h,
+                                    crop_x : crop_x + crop_w,
+                                ],
+                                crop_px=(crop_x, crop_y, crop_w, crop_h),
+                                frame_size=(frame_width, frame_height),
+                                frame_index=current,
+                                timestamp_ms=timestamp_ms,
+                                dt_seconds=dt_seconds,
+                            )
+                        )
+                        previous_sample_frame = current
+                        if len(batch) >= request.inferenceBatchSize:
+                            emit_batch(batch)
+                            batch.clear()
+                    else:
+                        metrics.increment("decodeFailures")
+                    target = next(targets, None)
+                else:
+                    metrics.record_duration(
+                        "decode",
+                        time.perf_counter() - decode_started,
+                    )
+                current += 1
+            emit_batch(batch)
 
-                    if processed % _PROGRESS_INTERVAL == 0:
-                        client.push_progress(processed, total_samples)
-            current += 1
-
-    client.push_progress(processed, total_samples)
-
+    with metrics.measure_stage("callbacks"):
+        client.push_progress(processed, total_samples)
+    metrics.set_value("processedFrames", processed)
     shot_events = shot_detector.events
-    for event in shot_events:
-        track_id = event.get("trackId")
-        if track_id is not None:
-            event["alliance"] = tracker.alliance_for_track(int(track_id))
+    _finalise_shot_alliances(shot_events, tracker)
+    processed_duration_ms = sum(
+        max(request.frameStride, group[-1] - group[0] + request.frameStride) / fps * 1000
+        for group in plan
+    )
+    with metrics.measure_stage("analytics"):
+        analytics = build_analytics(shot_events, processed, processed_duration_ms)
+    with metrics.measure_stage("path_aggregation"):
+        path_samples = path_collector.build()
+    with metrics.measure_stage("upload"):
+        client.upload_detections_file(request.detectionsUploadUrl, artifact_path)
+    metrics.set_value("artifactCompressedBytes", artifact_path.stat().st_size)
+    with metrics.measure_stage("callbacks"):
+        client.push_complete(shot_events, analytics, path_samples)
+    metrics.set_value("shotEvents", len(shot_events))
+    metrics.set_value("pathSamples", sum(len(bucket["points"]) for bucket in path_samples))
 
-    processed_duration_ms = sum((group[-1] - group[0]) / fps * 1000 for group in plan)
-    analytics = build_analytics(shot_events, processed, processed_duration_ms)
-    path_samples = _compute_path_samples(all_frames)
-    _upload_detection_artifact(request, client, all_frames)
-    client.push_complete(shot_events, analytics, path_samples)
+
+def _process_frame_batch(
+    frames: list[_BufferedFrame],
+    model: YOLO,
+    names: dict[int, str],
+    tracker: RobotTracker,
+    shot_detector: ShotDetector,
+    imgsz: int,
+    metrics: TelemetryCollector,
+) -> list[dict[str, Any]]:
+    inference_started = time.perf_counter()
+    results = model.predict(
+        [frame.cropped for frame in frames],
+        verbose=False,
+        imgsz=imgsz,
+        conf=_PREDICT_CONFIDENCE,
+    )
+    metrics.record_duration(
+        "inference",
+        time.perf_counter() - inference_started,
+    )
+    if len(results) != len(frames):
+        raise RuntimeError("Model returned an unexpected number of frame results")
+
+    return [
+        _process_frame(
+            frame.cropped,
+            frame.crop_px,
+            frame.frame_size,
+            frame.frame_index,
+            frame.timestamp_ms,
+            model,
+            names,
+            tracker,
+            shot_detector,
+            frame.dt_seconds,
+            imgsz,
+            metrics,
+            prediction=result,
+        )
+        for frame, result in zip(frames, results, strict=True)
+    ]
 
 
 def _process_frame(
@@ -323,13 +637,38 @@ def _process_frame(
     shot_detector: ShotDetector,
     dt_seconds: float,
     imgsz: int,
+    metrics: TelemetryCollector | None = None,
+    prediction: Any | None = None,
 ) -> dict[str, Any]:
     crop_x, crop_y, _crop_w, _crop_h = crop_px
     frame_width, frame_height = frame_size
 
-    result = model.predict(cropped, verbose=False, imgsz=imgsz, conf=_PREDICT_CONFIDENCE)[0]
+    if prediction is None:
+        inference_started = time.perf_counter()
+        result = model.predict(
+            cropped,
+            verbose=False,
+            imgsz=imgsz,
+            conf=_PREDICT_CONFIDENCE,
+        )[0]
+        if metrics is not None:
+            metrics.record_duration(
+                "inference",
+                time.perf_counter() - inference_started,
+            )
+    else:
+        result = prediction
     robots, fuel = _split_detections(result, names)
+
+    tracking_started = time.perf_counter()
     tracked_robots, alliances = tracker.update(robots, cropped)
+    if metrics is not None:
+        metrics.record_duration(
+            "robot_tracking",
+            time.perf_counter() - tracking_started,
+        )
+        metrics.increment("robotDetections", len(robots))
+        metrics.increment("fuelDetections", len(fuel))
 
     def to_full_norm_bbox(xyxy: np.ndarray) -> dict[str, float]:
         x1, y1, x2, y2 = (float(value) for value in xyxy)
@@ -385,7 +724,13 @@ def _process_frame(
             }
         )
 
+    shot_started = time.perf_counter()
     shot_detector.update(frame_index, timestamp_ms, fuel_centers, robot_states, dt_seconds)
+    if metrics is not None:
+        metrics.record_duration(
+            "fuel_tracking",
+            time.perf_counter() - shot_started,
+        )
 
     return {
         "frameIndex": frame_index,
