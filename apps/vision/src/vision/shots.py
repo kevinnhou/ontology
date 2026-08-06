@@ -4,6 +4,7 @@ _MAX_MATCH_DISTANCE = 0.16
 _SHOT_SPEED_THRESHOLD = 0.20
 _ROBOT_EXPANSION = 0.4
 _MAX_MISSED_FRAMES = 2
+_GRID_CELL_SIZE = _MAX_MATCH_DISTANCE
 
 
 @dataclass
@@ -26,6 +27,17 @@ class _FuelTracklet:
 
 def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
     return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+
+
+def _distance_squared(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+
+
+def _grid_cell(point: tuple[float, float]) -> tuple[int, int]:
+    return (
+        int(point[0] // _GRID_CELL_SIZE),
+        int(point[1] // _GRID_CELL_SIZE),
+    )
 
 
 def _robot_near(point: tuple[float, float], robots: list[RobotState]) -> RobotState | None:
@@ -51,6 +63,9 @@ class ShotDetector:
         self._tracklets: list[_FuelTracklet] = []
         self.events: list[dict] = []
 
+    def reset(self) -> None:
+        self._tracklets.clear()
+
     def update(
         self,
         frame_index: int,
@@ -62,19 +77,36 @@ class ShotDetector:
         if dt_seconds <= 0:
             dt_seconds = 1 / 30
 
-        unmatched = list(range(len(fuel_centers)))
+        fuel_grid: dict[tuple[int, int], list[int]] = {}
+        for fuel_index, center in enumerate(fuel_centers):
+            fuel_grid.setdefault(_grid_cell(center), []).append(fuel_index)
 
         pairs: list[tuple[float, int, int]] = []
         for tracklet_index, tracklet in enumerate(self._tracklets):
-            for fuel_index in unmatched:
-                distance = _distance(tracklet.center, fuel_centers[fuel_index])
-                if distance <= _MAX_MATCH_DISTANCE * (tracklet.missed + 1):
-                    pairs.append((distance, tracklet_index, fuel_index))
+            max_distance = _MAX_MATCH_DISTANCE * (tracklet.missed + 1)
+            max_distance_squared = max_distance**2
+            tracklet_cell = _grid_cell(tracklet.center)
+            cell_radius = int(max_distance // _GRID_CELL_SIZE) + 1
+            for cell_x in range(
+                tracklet_cell[0] - cell_radius,
+                tracklet_cell[0] + cell_radius + 1,
+            ):
+                for cell_y in range(
+                    tracklet_cell[1] - cell_radius,
+                    tracklet_cell[1] + cell_radius + 1,
+                ):
+                    for fuel_index in fuel_grid.get((cell_x, cell_y), []):
+                        distance_squared = _distance_squared(
+                            tracklet.center,
+                            fuel_centers[fuel_index],
+                        )
+                        if distance_squared <= max_distance_squared:
+                            pairs.append((distance_squared, tracklet_index, fuel_index))
         pairs.sort(key=lambda p: p[0])
 
         used_tracklets: set[int] = set()
         used_fuel: set[int] = set()
-        for distance, tracklet_index, fuel_index in pairs:
+        for distance_squared, tracklet_index, fuel_index in pairs:
             if tracklet_index in used_tracklets or fuel_index in used_fuel:
                 continue
             used_tracklets.add(tracklet_index)
@@ -82,6 +114,7 @@ class ShotDetector:
 
             tracklet = self._tracklets[tracklet_index]
             center = fuel_centers[fuel_index]
+            distance = distance_squared**0.5
             elapsed = dt_seconds * (tracklet.missed + 1)
             speed = distance / elapsed
             previous_center = tracklet.center
