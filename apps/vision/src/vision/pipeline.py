@@ -500,8 +500,14 @@ def _process_capture(
                     client.push_progress(processed, total_samples)
                 last_progress_at = now
 
+        finalised_event_count = 0
         for group_index, group in enumerate(plan):
             if group_index > 0:
+                _finalise_shot_alliances(
+                    shot_detector.events[finalised_event_count:],
+                    tracker,
+                )
+                finalised_event_count = len(shot_detector.events)
                 tracker.reset()
                 shot_detector.reset()
 
@@ -564,7 +570,7 @@ def _process_capture(
         client.push_progress(processed, total_samples)
     metrics.set_value("processedFrames", processed)
     shot_events = shot_detector.events
-    _finalise_shot_alliances(shot_events, tracker)
+    _finalise_shot_alliances(shot_events[finalised_event_count:], tracker)
     processed_duration_ms = sum(
         max(request.frameStride, group[-1] - group[0] + request.frameStride) / fps * 1000
         for group in plan
